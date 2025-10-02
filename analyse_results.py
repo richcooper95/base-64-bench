@@ -4,7 +4,6 @@ Analyze base64 encoding/decoding benchmark results.
 
 This script performs comprehensive analysis of eval results including:
 - Threshold sweep analysis (accuracy vs threshold)
-- ROC curve analysis
 - Similarity distribution analysis
 - Performance by data type
 - Model comparison across metrics
@@ -16,7 +15,6 @@ from pathlib import Path
 import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
-from sklearn.metrics import roc_curve, auc, precision_recall_curve
 import pandas as pd
 from typing import Dict, List, Tuple, Any
 import argparse
@@ -222,57 +220,6 @@ def plot_similarity_distributions(df: pd.DataFrame, save_path: str = None):
     plt.show()
 
 
-def plot_roc_analysis(df: pd.DataFrame, gold_standard_threshold: float = 0.95, save_path: str = None):
-    """
-    Plot ROC curves treating similarity ≥ gold_standard_threshold as ground truth positive.
-
-    This shows how well different thresholds discriminate between "good" and "bad" attempts.
-    """
-    plt.figure(figsize=(10, 8))
-
-    # Calculate performance at threshold=1.0 for ordering
-    model_performance = []
-    for model in df['model'].unique():
-        model_data = df[df['model'] == model]
-        accuracy_at_1_0 = (model_data['similarity'] >= 1.0).mean()
-        model_performance.append((model, accuracy_at_1_0))
-
-    # Sort models by performance at threshold=1.0 (descending)
-    model_performance.sort(key=lambda x: x[1], reverse=True)
-
-    # Function to clean model names (remove provider prefix)
-    def clean_model_name(full_name: str) -> str:
-        return full_name.split('/')[-1]
-
-    for model, _ in model_performance:
-        model_data = df[df['model'] == model]
-
-        # Define ground truth: similarity ≥ gold_standard_threshold
-        y_true = (model_data['similarity'] >= gold_standard_threshold).astype(int)
-
-        # Use similarity scores as the "prediction confidence"
-        y_scores = model_data['similarity']
-
-        # Compute ROC curve
-        fpr, tpr, thresholds = roc_curve(y_true, y_scores)
-        roc_auc = auc(fpr, tpr)
-
-        clean_name = clean_model_name(model)
-        plt.plot(fpr, tpr, label=f'{clean_name} (AUC = {roc_auc:.3f})', alpha=0.7, linewidth=1)
-
-    plt.plot([0, 1], [0, 1], 'k--', alpha=0.5, label='Random')
-    plt.xlabel('False Positive Rate')
-    plt.ylabel('True Positive Rate')
-    plt.title(f'ROC Curves (Gold Standard: Similarity ≥ {gold_standard_threshold})')
-    plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
-    plt.grid(True, alpha=0.3)
-    plt.tight_layout()
-
-    if save_path:
-        plt.savefig(save_path, dpi=300, bbox_inches='tight')
-    plt.show()
-
-
 def plot_performance_by_data_type(df: pd.DataFrame, threshold: float = 0.95, save_path: str = None):
     """Plot model performance broken down by data type."""
     # Calculate accuracy by model and data type
@@ -387,8 +334,6 @@ def main():
                        help='Directory to save plots')
     parser.add_argument('--threshold', type=float, default=0.95,
                        help='Primary threshold for analysis')
-    parser.add_argument('--gold-standard', type=float, default=0.95,
-                       help='Gold standard threshold for ROC analysis')
 
     args = parser.parse_args()
 
@@ -418,16 +363,13 @@ def main():
     print("2. Generating similarity distributions...")
     plot_similarity_distributions(df, os.path.join(args.output_dir, "similarity_distributions.png"))
 
-    print("3. Generating ROC analysis...")
-    plot_roc_analysis(df, args.gold_standard, os.path.join(args.output_dir, "roc_curves.png"))
-
-    print("4. Analyzing performance by data type...")
+    print("3. Analyzing performance by data type...")
     plot_performance_by_data_type(df, args.threshold, os.path.join(args.output_dir, "performance_by_type.png"))
 
-    print("5. Analyzing encoding vs decoding performance...")
+    print("4. Analyzing encoding vs decoding performance...")
     plot_performance_by_task(df, args.threshold, os.path.join(args.output_dir, "encode_vs_decode.png"))
 
-    print("6. Generating summary table...")
+    print("5. Generating summary table...")
     summary = generate_summary_table(df, args.threshold)
     summary_path = os.path.join(args.output_dir, "model_summary.csv")
     summary.to_csv(summary_path)
@@ -441,7 +383,6 @@ def main():
     print("\nFiles generated:")
     print("  - threshold_sweep.png: Accuracy vs threshold curves")
     print("  - similarity_distributions.png: Histogram of similarity scores")
-    print("  - roc_curves.png: ROC curves for model discrimination")
     print("  - performance_by_type.png: Heatmap of accuracy by data type")
     print("  - encode_vs_decode.png: Encoding vs decoding performance")
     print("  - model_summary.csv: Detailed performance statistics")
@@ -453,10 +394,9 @@ if __name__ == '__main__':
         import matplotlib.pyplot as plt
         import seaborn as sns
         import pandas as pd
-        from sklearn.metrics import roc_curve, auc
     except ImportError as e:
         print(f"Missing required packages: {e}")
-        print("Install with: pip install matplotlib seaborn pandas scikit-learn")
+        print("Install with: pip install matplotlib seaborn pandas")
         exit(1)
 
     main()
