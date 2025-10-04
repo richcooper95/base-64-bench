@@ -21,6 +21,30 @@ import argparse
 from inspect_ai.log import read_eval_log
 
 
+def get_model_performance_ordering(df: pd.DataFrame) -> List[Tuple[str, float]]:
+    """
+    Get models ordered by overall performance at threshold=1.0 (descending).
+
+    Returns:
+        List of (model_name, accuracy_at_1_0) tuples, sorted by accuracy descending
+    """
+    model_performance_at_1_0 = []
+
+    for model in df['model'].unique():
+        model_data = df[df['model'] == model]
+        accuracy_at_1_0 = (model_data['similarity'] >= 1.0).mean()
+        model_performance_at_1_0.append((model, accuracy_at_1_0))
+
+    # Sort models by performance at threshold=1.0 (descending)
+    model_performance_at_1_0.sort(key=lambda x: x[1], reverse=True)
+    return model_performance_at_1_0
+
+
+def clean_model_name(full_name: str) -> str:
+    """Clean model names by removing provider prefix."""
+    return full_name.split('/')[-1]  # Take everything after the last slash
+
+
 def load_eval_results(logs_dir: str = "base64bench-logs/results") -> Dict[str, List]:
     """
     Load all evaluation results from the logs directory using Inspect AI's log reader.
@@ -128,20 +152,8 @@ def plot_threshold_sweep(df: pd.DataFrame, save_path: str = None):
         [1.0]  # Exactly 1.0
     ])
 
-    # Calculate performance at threshold=1.0 for ordering
-    model_performance_at_1_0 = []
-
-    for model in df['model'].unique():
-        model_data = df[df['model'] == model]
-        accuracy_at_1_0 = (model_data['similarity'] >= 1.0).mean()
-        model_performance_at_1_0.append((model, accuracy_at_1_0))
-
-    # Sort models by performance at threshold=1.0 (descending)
-    model_performance_at_1_0.sort(key=lambda x: x[1], reverse=True)
-
-    # Function to clean model names (remove provider prefix)
-    def clean_model_name(full_name: str) -> str:
-        return full_name.split('/')[-1]  # Take everything after the last slash
+    # Get consistent model ordering
+    model_performance_at_1_0 = get_model_performance_ordering(df)
 
     # Plot 1: Full range (0.0 - 1.0)
     for model, _ in model_performance_at_1_0:
@@ -187,11 +199,83 @@ def plot_threshold_sweep(df: pd.DataFrame, save_path: str = None):
     plt.show()
 
 
+def plot_threshold_sweep_by_task(df: pd.DataFrame, encode_save_path: str = None, decode_save_path: str = None):
+    """Plot separate threshold sweep graphs for encode and decode tasks."""
+
+    def create_threshold_sweep_subplot(task_data, task_name, save_path, overall_df):
+        """Create a threshold sweep plot for a specific task."""
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(20, 8))
+
+        thresholds = np.arange(0.0, 1.01, 0.05)
+        # Create zoom thresholds for high-performance range
+        thresholds_zoom = np.concatenate([
+            np.arange(0.95, 1.0, 0.005),  # 0.95 to 0.995 with high resolution
+            [1.0]  # Exactly 1.0
+        ])
+
+        # Get consistent model ordering based on overall data (not task-specific)
+        model_performance_at_1_0 = get_model_performance_ordering(overall_df)
+
+        # Plot 1: Full range (0.0 - 1.0)
+        for model, _ in model_performance_at_1_0:
+            model_data = task_data[task_data['model'] == model]
+            accuracies = []
+
+            for thresh in thresholds:
+                accuracy = (model_data['similarity'] >= thresh).mean()
+                accuracies.append(accuracy)
+
+            clean_name = clean_model_name(model)
+            ax1.plot(thresholds, accuracies, marker='o', markersize=3, label=clean_name, alpha=0.7, linewidth=1)
+
+        ax1.set_xlabel('Similarity Threshold')
+        ax1.set_ylabel('Accuracy')
+        ax1.set_title(f'Accuracy vs Similarity Threshold - {task_name.title()} (Full Range)')
+        ax1.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
+        ax1.grid(True, alpha=0.3)
+
+        # Plot 2: Zoomed range (0.95 - 1.0)
+        for model, _ in model_performance_at_1_0:
+            model_data = task_data[task_data['model'] == model]
+            accuracies_zoom = []
+
+            for thresh in thresholds_zoom:
+                accuracy = (model_data['similarity'] >= thresh).mean()
+                accuracies_zoom.append(accuracy)
+
+            clean_name = clean_model_name(model)
+            ax2.plot(thresholds_zoom, accuracies_zoom, marker='o', markersize=3, label=clean_name, alpha=0.7, linewidth=1)
+
+        ax2.set_xlabel('Similarity Threshold')
+        ax2.set_ylabel('Accuracy')
+        ax2.set_title(f'Accuracy vs Similarity Threshold - {task_name.title()} (Zoomed: 0.95-1.0)')
+        ax2.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
+        ax2.grid(True, alpha=0.3)
+        ax2.set_xlim(0.95, 1.0)
+
+        plt.tight_layout()
+        if save_path:
+            plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        plt.show()
+
+    # Split data by task
+    encode_data = df[df['task'] == 'encode']
+    decode_data = df[df['task'] == 'decode']
+
+    # Create separate plots
+    print("  Encode tasks...")
+    create_threshold_sweep_subplot(encode_data, 'encode', encode_save_path, df)
+    print("  Decode tasks...")
+    create_threshold_sweep_subplot(decode_data, 'decode', decode_save_path, df)
+
+
 def plot_similarity_distributions(df: pd.DataFrame, save_path: str = None):
     """Plot similarity score distributions for each model."""
     plt.figure(figsize=(15, 10))
 
-    models = df['model'].unique()
+    # Get consistent model ordering
+    model_performance_ordering = get_model_performance_ordering(df)
+    models = [model for model, _ in model_performance_ordering]
     n_models = len(models)
     cols = 3
     rows = (n_models + cols - 1) // cols
@@ -204,7 +288,7 @@ def plot_similarity_distributions(df: pd.DataFrame, save_path: str = None):
         plt.axvline(x=0.95, color='red', linestyle='--', alpha=0.5, label='95% threshold')
         plt.axvline(x=1.0, color='green', linestyle='--', alpha=0.5, label='100% threshold')
 
-        plt.title(f'{model}\n(n={len(model_data)})')
+        plt.title(f'{clean_model_name(model)}\n(n={len(model_data)})')
         plt.xlabel('Similarity Score')
         plt.ylabel('Density')
         plt.xlim(0, 1)
@@ -231,6 +315,13 @@ def plot_performance_by_data_type(df: pd.DataFrame, threshold: float = 0.95, sav
     # Pivot for heatmap
     heatmap_data = accuracy_by_type.pivot(index='data_type', columns='model', values='accuracy')
 
+    # Get consistent model ordering and reorder columns
+    model_performance_ordering = get_model_performance_ordering(df)
+    ordered_models = [model for model, _ in model_performance_ordering]
+    # Keep only models that exist in the heatmap data
+    ordered_models = [model for model in ordered_models if model in heatmap_data.columns]
+    heatmap_data = heatmap_data[ordered_models]
+
     plt.figure(figsize=(15, 10))
     sns.heatmap(heatmap_data, annot=True, cmap='RdYlGn', fmt='.2f',
                 cbar_kws={'label': 'Accuracy'}, vmin=0, vmax=1)
@@ -245,6 +336,103 @@ def plot_performance_by_data_type(df: pd.DataFrame, threshold: float = 0.95, sav
     plt.show()
 
 
+def plot_performance_by_data_type_by_task(df: pd.DataFrame, threshold: float = 1.0,
+                                         encode_save_path: str = None, decode_save_path: str = None):
+    """Plot separate performance by data type heatmaps for encode and decode tasks."""
+
+    def create_performance_heatmap(task_data, task_name, save_path, overall_df):
+        """Create a performance by data type heatmap for a specific task."""
+        # Calculate accuracy by model and data type for this task
+        accuracy_by_type = task_data.groupby(['model', 'data_type'])['similarity'].apply(
+            lambda x: (x >= threshold).mean()
+        ).reset_index()
+        accuracy_by_type.columns = ['model', 'data_type', 'accuracy']
+
+        # Pivot for heatmap
+        heatmap_data = accuracy_by_type.pivot(index='data_type', columns='model', values='accuracy')
+
+        # Get consistent model ordering based on overall data (not task-specific)
+        # We use df from the parent scope to ensure consistent ordering across all graphs
+        model_performance_ordering = get_model_performance_ordering(df)
+        ordered_models = [model for model, _ in model_performance_ordering]
+        # Keep only models that exist in the heatmap data
+        ordered_models = [model for model in ordered_models if model in heatmap_data.columns]
+        heatmap_data = heatmap_data[ordered_models]
+
+        plt.figure(figsize=(15, 10))
+        sns.heatmap(heatmap_data, annot=True, cmap='RdYlGn', fmt='.2f',
+                    cbar_kws={'label': 'Accuracy'}, vmin=0, vmax=1)
+        plt.title(f'Accuracy by Data Type and Model - {task_name.title()} (Threshold: {threshold})')
+        plt.ylabel('Data Type')
+        plt.xlabel('Model')
+        plt.xticks(rotation=45, ha='right')
+        plt.tight_layout()
+
+        if save_path:
+            plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        plt.show()
+
+    # Split data by task
+    encode_data = df[df['task'] == 'encode']
+    decode_data = df[df['task'] == 'decode']
+
+    # Create separate heatmaps
+    print("  Encode tasks...")
+    create_performance_heatmap(encode_data, 'encode', encode_save_path, df)
+    print("  Decode tasks...")
+    create_performance_heatmap(decode_data, 'decode', decode_save_path, df)
+
+
+def plot_similarity_distributions_by_task(df: pd.DataFrame,
+                                         encode_save_path: str = None, decode_save_path: str = None):
+    """Plot separate similarity distribution graphs for encode and decode tasks."""
+
+    def create_similarity_distributions(task_data, task_name, save_path, overall_df):
+        """Create similarity distribution plots for a specific task."""
+        plt.figure(figsize=(15, 10))
+
+        # Get consistent model ordering based on overall data (not task-specific)
+        # We use df from the parent scope to ensure consistent ordering across all graphs
+        model_performance_ordering = get_model_performance_ordering(df)
+        models = [model for model, _ in model_performance_ordering]
+        n_models = len(models)
+        cols = 3
+        rows = (n_models + cols - 1) // cols
+
+        for i, model in enumerate(models, 1):
+            plt.subplot(rows, cols, i)
+            model_data = task_data[task_data['model'] == model]
+
+            plt.hist(model_data['similarity'], bins=50, alpha=0.7, density=True)
+            plt.axvline(x=0.95, color='red', linestyle='--', alpha=0.5, label='95% threshold')
+            plt.axvline(x=1.0, color='green', linestyle='--', alpha=0.5, label='100% threshold')
+
+            plt.title(f'{clean_model_name(model)}\n(n={len(model_data)})')
+            plt.xlabel('Similarity Score')
+            plt.ylabel('Density')
+            plt.xlim(0, 1)
+
+            if i == 1:  # Add legend to first plot
+                plt.legend()
+
+        plt.suptitle(f'Similarity Score Distributions by Model - {task_name.title()} Tasks', fontsize=16)
+        plt.tight_layout()
+
+        if save_path:
+            plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        plt.show()
+
+    # Split data by task
+    encode_data = df[df['task'] == 'encode']
+    decode_data = df[df['task'] == 'decode']
+
+    # Create separate distributions
+    print("  Encode tasks...")
+    create_similarity_distributions(encode_data, 'encode', encode_save_path, df)
+    print("  Decode tasks...")
+    create_similarity_distributions(decode_data, 'decode', decode_save_path, df)
+
+
 def plot_performance_by_task(df: pd.DataFrame, threshold: float = 0.95, save_path: str = None):
     """Plot model performance by encoding vs decoding task."""
     accuracy_by_task = df.groupby(['model', 'task'])['similarity'].apply(
@@ -252,16 +440,9 @@ def plot_performance_by_task(df: pd.DataFrame, threshold: float = 0.95, save_pat
     ).reset_index()
     accuracy_by_task.columns = ['model', 'task', 'accuracy']
 
-    # Calculate overall performance for ordering
-    model_performance = df.groupby('model')['similarity'].apply(
-        lambda x: (x >= 1.0).mean()
-    ).reset_index()
-    model_performance.columns = ['model', 'overall_accuracy']
-    model_performance = model_performance.sort_values('overall_accuracy', ascending=False)
-
-    # Function to clean model names
-    def clean_model_name(full_name: str) -> str:
-        return full_name.split('/')[-1]
+    # Get consistent model ordering
+    model_performance_ordering = get_model_performance_ordering(df)
+    ordered_models = [model for model, _ in model_performance_ordering]
 
     plt.figure(figsize=(15, 8))
 
@@ -269,9 +450,17 @@ def plot_performance_by_task(df: pd.DataFrame, threshold: float = 0.95, save_pat
     encode_data = accuracy_by_task[accuracy_by_task['task'] == 'encode']
     decode_data = accuracy_by_task[accuracy_by_task['task'] == 'decode']
 
-    # Merge with performance ordering and clean names
-    encode_data = encode_data.merge(model_performance[['model']], on='model', how='inner')
-    decode_data = decode_data.merge(model_performance[['model']], on='model', how='inner')
+    # Filter data to only include models in our ordered list and sort by the ordering
+    encode_data = encode_data[encode_data['model'].isin(ordered_models)]
+    decode_data = decode_data[decode_data['model'].isin(ordered_models)]
+
+    # Create mapping for consistent ordering
+    model_order = {model: i for i, model in enumerate(ordered_models)}
+    encode_data['order'] = encode_data['model'].map(model_order)
+    decode_data['order'] = decode_data['model'].map(model_order)
+
+    encode_data = encode_data.sort_values('order')
+    decode_data = decode_data.sort_values('order')
 
     # Clean model names
     encode_data['clean_model'] = encode_data['model'].apply(clean_model_name)
@@ -300,6 +489,7 @@ def generate_summary_table(df: pd.DataFrame, threshold: float = 0.95) -> pd.Data
     """Generate a summary table of model performance."""
     summary = df.groupby('model').agg({
         'similarity': ['count', 'mean', 'std', 'min', 'max'],
+        'passed_at_1_0': 'mean',
         'passed_at_95': 'mean',
         'passed_at_90': 'mean',
         'input_length': 'mean',
@@ -314,14 +504,15 @@ def generate_summary_table(df: pd.DataFrame, threshold: float = 0.95) -> pd.Data
         'similarity_std': 'std_similarity',
         'similarity_min': 'min_similarity',
         'similarity_max': 'max_similarity',
+        'passed_at_1_0_mean': 'accuracy_100',
         'passed_at_95_mean': 'accuracy_95',
         'passed_at_90_mean': 'accuracy_90',
         'input_length_mean': 'avg_input_length',
         'distance_mean': 'avg_levenshtein_distance'
     })
 
-    # Sort by accuracy at 95% threshold
-    summary = summary.sort_values('accuracy_95', ascending=False)
+    # Sort by accuracy at perfect threshold (1.0)
+    summary = summary.sort_values('accuracy_100', ascending=False)
 
     return summary
 
@@ -360,16 +551,31 @@ def main():
     print("\n1. Generating threshold sweep analysis...")
     plot_threshold_sweep(df, os.path.join(args.output_dir, "threshold_sweep.png"))
 
-    print("2. Generating similarity distributions...")
+    print("\n2. Generating task-specific threshold sweep analysis...")
+    plot_threshold_sweep_by_task(df,
+                                 os.path.join(args.output_dir, "threshold_sweep_encode.png"),
+                                 os.path.join(args.output_dir, "threshold_sweep_decode.png"))
+
+    print("\n3. Generating similarity distributions...")
     plot_similarity_distributions(df, os.path.join(args.output_dir, "similarity_distributions.png"))
 
-    print("3. Analyzing performance by data type...")
-    plot_performance_by_data_type(df, args.threshold, os.path.join(args.output_dir, "performance_by_type.png"))
+    print("\n4. Generating task-specific similarity distributions...")
+    plot_similarity_distributions_by_task(df,
+                                         os.path.join(args.output_dir, "similarity_distributions_encode.png"),
+                                         os.path.join(args.output_dir, "similarity_distributions_decode.png"))
 
-    print("4. Analyzing encoding vs decoding performance...")
-    plot_performance_by_task(df, args.threshold, os.path.join(args.output_dir, "encode_vs_decode.png"))
+    print("\n5. Analyzing performance by data type...")
+    plot_performance_by_data_type(df, 1.0, os.path.join(args.output_dir, "performance_by_type.png"))
 
-    print("5. Generating summary table...")
+    print("\n6. Analyzing task-specific performance by data type...")
+    plot_performance_by_data_type_by_task(df, 1.0,
+                                         os.path.join(args.output_dir, "performance_by_type_encode.png"),
+                                         os.path.join(args.output_dir, "performance_by_type_decode.png"))
+
+    print("\n7. Analyzing encoding vs decoding performance...")
+    plot_performance_by_task(df, 1.0, os.path.join(args.output_dir, "encode_vs_decode.png"))
+
+    print("8. Generating summary table...")
     summary = generate_summary_table(df, args.threshold)
     summary_path = os.path.join(args.output_dir, "model_summary.csv")
     summary.to_csv(summary_path)
@@ -377,14 +583,20 @@ def main():
     print("\n" + "="*60)
     print("MODEL PERFORMANCE SUMMARY")
     print("="*60)
-    print(summary[['total_samples', 'avg_similarity', 'accuracy_95', 'accuracy_90']].to_string())
+    print(summary[['total_samples', 'avg_similarity', 'accuracy_100', 'accuracy_95', 'accuracy_90']].to_string())
 
     print(f"\nAll plots and summary saved to: {args.output_dir}/")
     print("\nFiles generated:")
-    print("  - threshold_sweep.png: Accuracy vs threshold curves")
-    print("  - similarity_distributions.png: Histogram of similarity scores")
-    print("  - performance_by_type.png: Heatmap of accuracy by data type")
-    print("  - encode_vs_decode.png: Encoding vs decoding performance")
+    print("  - threshold_sweep.png: Accuracy vs threshold curves (combined)")
+    print("  - threshold_sweep_encode.png: Accuracy vs threshold curves (encode tasks only)")
+    print("  - threshold_sweep_decode.png: Accuracy vs threshold curves (decode tasks only)")
+    print("  - similarity_distributions.png: Histogram of similarity scores (combined)")
+    print("  - similarity_distributions_encode.png: Histogram of similarity scores (encode tasks only)")
+    print("  - similarity_distributions_decode.png: Histogram of similarity scores (decode tasks only)")
+    print("  - performance_by_type.png: Heatmap of accuracy by data type (combined, threshold=1.0)")
+    print("  - performance_by_type_encode.png: Heatmap of accuracy by data type (encode tasks only, threshold=1.0)")
+    print("  - performance_by_type_decode.png: Heatmap of accuracy by data type (decode tasks only, threshold=1.0)")
+    print("  - encode_vs_decode.png: Encoding vs decoding performance (threshold=1.0)")
     print("  - model_summary.csv: Detailed performance statistics")
 
 
