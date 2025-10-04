@@ -1,4 +1,4 @@
-![Threshold Sweep Analysis](base64bench_logo.png)
+![Base64Bench Logo](base64bench_logo.png)
 
 # Base64Bench - base64 {en,de}coding evaluation
 
