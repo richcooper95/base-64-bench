@@ -170,6 +170,7 @@ def record_to_sample_encode(record):
 def record_to_sample_decode(record):
     """Convert dataset record to Sample for decoding task."""
     text = record["text"]
+    record_type = record["type"]
     # Encode the text to base64
     encoded = base64.b64encode(text.encode('utf-8')).decode('utf-8')
     # Format the prompt directly
@@ -177,7 +178,7 @@ def record_to_sample_decode(record):
     return Sample(
         input=prompt,
         target=text,  # Store original text in target for comparison
-        metadata={"task": "decode"}
+        metadata={"task": "decode", "type": record_type}
     )
 
 
